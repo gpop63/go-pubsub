@@ -3,8 +3,9 @@ package pubsub
 // Subscription receives messages matching a topic pattern on the channel
 // returned by C.
 type Subscription[T any] struct {
-	broker *Broker[T]
-	ch     chan Message[T]
+	pattern pattern
+	broker  *Broker[T]
+	ch      chan Message[T]
 }
 
 // C returns a receive-only channel for messages.

@@ -1,7 +1,6 @@
 package pubsub
 
 import (
-	"strings"
 	"sync"
 	"time"
 )
@@ -14,7 +13,7 @@ type node[T any] struct {
 }
 
 // Broker is an in-process pub/sub message broker. It routes messages to
-// subscribers using a trie for exact topic matching.
+// subscribers using a trie, supporting * and ** wildcards.
 // Safe for concurrent use.
 type Broker[T any] struct {
 	root *node[T]
@@ -28,10 +27,11 @@ func NewBroker[T any]() *Broker[T] {
 	}
 }
 
-// Publish sends a message to all subscribers whose topics match exactly.
+// Publish sends a message to all subscribers whose patterns match the topic.
 func (b *Broker[T]) Publish(topic string, payload T) error {
-	if topic == "" {
-		return ErrTopicEmpty
+	segments, err := validateTopic(topic)
+	if err != nil {
+		return err
 	}
 
 	id, err := generateID() // crypto/rand syscall on every publish
@@ -49,12 +49,11 @@ func (b *Broker[T]) Publish(topic string, payload T) error {
 	b.mu.RLock()
 	defer b.mu.RUnlock()
 
-	levels := strings.Split(topic, ".")
-	b.deliverToMatching(b.root, levels, msg)
+	b.deliverToMatching(b.root, segments, msg)
 	return nil
 }
 
-// deliverToMatching walks the trie and delivers msg to matching subscribers.
+// deliverToMatching walks the trie and delivers msg to all matching subscribers.
 func (b *Broker[T]) deliverToMatching(n *node[T], levels []string, msg Message[T]) {
 	if n == nil {
 		return
@@ -68,25 +67,42 @@ func (b *Broker[T]) deliverToMatching(n *node[T], levels []string, msg Message[T
 		return
 	}
 
-	if child := n.children[levels[0]]; child != nil {
-		b.deliverToMatching(child, levels[1:], msg)
+	part := levels[0]
+	rest := levels[1:]
+
+	// Exact match
+	if child := n.children[part]; child != nil {
+		b.deliverToMatching(child, rest, msg)
+	}
+
+	// Single-level wildcard: * matches exactly one segment
+	if child := n.children["*"]; child != nil {
+		b.deliverToMatching(child, rest, msg)
+	}
+
+	// Multi-level wildcard: ** matches one or more remaining segments
+	if child := n.children["**"]; child != nil {
+		for _, sub := range child.subs {
+			sub.ch <- msg
+		}
 	}
 }
 
-// Subscribe creates a subscription for the given topic.
-func (b *Broker[T]) Subscribe(topic string) (*Subscription[T], error) {
-	if topic == "" {
-		return nil, ErrTopicEmpty
+// Subscribe creates a subscription for the given topic pattern.
+func (b *Broker[T]) Subscribe(topicPattern string) (*Subscription[T], error) {
+	pat, err := compilePattern(topicPattern)
+	if err != nil {
+		return nil, err
 	}
 
 	sub := &Subscription[T]{
-		broker: b,
-		ch:     make(chan Message[T], 256),
+		pattern: pat,
+		broker:  b,
+		ch:      make(chan Message[T], 256),
 	}
 
 	b.mu.Lock()
-	segments := strings.Split(topic, ".")
-	insertNode(b.root, segments, sub)
+	insertNode(b.root, pat.segments, sub)
 	b.mu.Unlock()
 
 	return sub, nil
