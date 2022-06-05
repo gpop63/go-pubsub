@@ -12,12 +12,17 @@ type node[T any] struct {
 	subs     []*Subscription[T]
 }
 
+func (n *node[T]) isEmpty() bool {
+	return len(n.subs) == 0 && len(n.children) == 0
+}
+
 // Broker is an in-process pub/sub message broker. It routes messages to
 // subscribers using a trie, supporting * and ** wildcards.
 // Safe for concurrent use.
 type Broker[T any] struct {
-	root *node[T]
-	mu   sync.RWMutex
+	root   *node[T]
+	mu     sync.RWMutex
+	closed bool
 }
 
 // NewBroker creates a new Broker.
@@ -48,6 +53,10 @@ func (b *Broker[T]) Publish(topic string, payload T) error {
 
 	b.mu.RLock()
 	defer b.mu.RUnlock()
+
+	if b.closed {
+		return ErrBrokerClosed
+	}
 
 	b.deliverToMatching(b.root, segments, msg)
 	return nil
@@ -102,6 +111,11 @@ func (b *Broker[T]) Subscribe(topicPattern string) (*Subscription[T], error) {
 	}
 
 	b.mu.Lock()
+	if b.closed {
+		b.mu.Unlock()
+		close(sub.ch)
+		return nil, ErrBrokerClosed
+	}
 	insertNode(b.root, pat.segments, sub)
 	b.mu.Unlock()
 
@@ -128,10 +142,67 @@ func insertNode[T any](n *node[T], levels []string, sub *Subscription[T]) {
 	insertNode(child, levels[1:], sub)
 }
 
+// Unsubscribe removes a subscription and closes its channel.
+// Subsequent calls are no-ops.
+func (b *Broker[T]) Unsubscribe(sub *Subscription[T]) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	if sub.closed {
+		return nil
+	}
+	sub.closed = true
+
+	removeSub(b.root, sub.pattern.segments, sub)
+	close(sub.ch)
+	return nil
+}
+
+// removeSub removes a subscription from the trie and prunes empty nodes.
+func removeSub[T any](n *node[T], levels []string, sub *Subscription[T]) bool {
+	if n == nil {
+		return false
+	}
+
+	if len(levels) == 0 {
+		for i, s := range n.subs {
+			if s == sub {
+				last := len(n.subs) - 1
+				n.subs[i] = n.subs[last]
+				n.subs[last] = nil // nil the vacated slot to avoid memory leak
+				n.subs = n.subs[:last]
+				return true
+			}
+		}
+		return false
+	}
+
+	lvl := levels[0]
+	child, ok := n.children[lvl]
+	if !ok {
+		return false
+	}
+
+	if removeSub(child, levels[1:], sub) {
+		// Prune empty trie nodes on the way back up
+		if child.isEmpty() {
+			delete(n.children, lvl)
+		}
+		return true
+	}
+	return false
+}
+
 // Close shuts down the broker and closes all subscription channels.
+// Further operations return ErrBrokerClosed.
 func (b *Broker[T]) Close() error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
+
+	if b.closed {
+		return nil
+	}
+	b.closed = true
 
 	var closeSubs func(n *node[T])
 	closeSubs = func(n *node[T]) {
@@ -139,6 +210,10 @@ func (b *Broker[T]) Close() error {
 			return
 		}
 		for _, sub := range n.subs {
+			if sub.closed {
+				continue
+			}
+			sub.closed = true
 			close(sub.ch)
 		}
 		for _, child := range n.children {

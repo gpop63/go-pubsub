@@ -1,9 +1,12 @@
 package pubsub
 
 import (
+	"errors"
 	"testing"
 	"time"
 )
+
+// --- Basic pub/sub ---
 
 func TestPublishSubscribe(t *testing.T) {
 	b := NewBroker[string]()
@@ -76,7 +79,6 @@ func TestSingleLevelWildcardNoMatchDeeper(t *testing.T) {
 
 	sub, _ := b.Subscribe("foo.*")
 
-	// foo.* should NOT match foo.bar.baz (3 levels)
 	b.Publish("foo.bar.baz", "deep")
 
 	select {
@@ -129,7 +131,6 @@ func TestMultiLevelWildcardNoMatchRoot(t *testing.T) {
 
 	sub, _ := b.Subscribe("foo.**")
 
-	// foo.** requires at least foo + one more segment
 	b.Publish("foo", "root")
 
 	select {
@@ -161,7 +162,6 @@ func TestWildcardMixed(t *testing.T) {
 		}
 	}
 
-	// Should not receive the non-matching message
 	select {
 	case msg := <-sub.C():
 		t.Fatalf("unexpected message: %v", msg)
@@ -192,6 +192,27 @@ func TestCatchAllDoubleStarPattern(t *testing.T) {
 			}
 		case <-time.After(time.Second):
 			t.Fatalf("expected message %d (%q), timed out", i, want)
+		}
+	}
+}
+
+func TestMultipleSubscribersSamePattern(t *testing.T) {
+	b := NewBroker[string]()
+	defer b.Close()
+
+	sub1, _ := b.Subscribe("events.click")
+	sub2, _ := b.Subscribe("events.click")
+
+	b.Publish("events.click", "btn")
+
+	for i, sub := range []*Subscription[string]{sub1, sub2} {
+		select {
+		case msg := <-sub.C():
+			if msg.Payload != "btn" {
+				t.Fatalf("sub%d: expected payload %q, got %q", i+1, "btn", msg.Payload)
+			}
+		case <-time.After(time.Second):
+			t.Fatalf("sub%d: did not receive message", i+1)
 		}
 	}
 }
@@ -247,26 +268,81 @@ func TestPublishInvalidTopics(t *testing.T) {
 	}
 }
 
-func TestMultipleSubscribersSamePattern(t *testing.T) {
+// --- Unsubscribe ---
+
+func TestUnsubscribeClosesChannel(t *testing.T) {
 	b := NewBroker[string]()
 	defer b.Close()
 
-	sub1, _ := b.Subscribe("events.click")
-	sub2, _ := b.Subscribe("events.click")
+	sub, _ := b.Subscribe("x.y")
+	b.Unsubscribe(sub)
 
-	b.Publish("events.click", "btn")
-
-	for i, sub := range []*Subscription[string]{sub1, sub2} {
-		select {
-		case msg := <-sub.C():
-			if msg.Payload != "btn" {
-				t.Fatalf("sub%d: expected payload %q, got %q", i+1, "btn", msg.Payload)
-			}
-		case <-time.After(time.Second):
-			t.Fatalf("sub%d: did not receive message", i+1)
-		}
+	_, ok := <-sub.C()
+	if ok {
+		t.Fatal("expected channel to be closed")
 	}
 }
+
+func TestUnsubscribeIdempotent(t *testing.T) {
+	b := NewBroker[string]()
+	defer b.Close()
+
+	sub, _ := b.Subscribe("x.y")
+
+	if err := b.Unsubscribe(sub); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.Unsubscribe(sub); err != nil {
+		t.Fatal("second unsubscribe should be a no-op")
+	}
+}
+
+func TestSubscriptionClose(t *testing.T) {
+	b := NewBroker[string]()
+	defer b.Close()
+
+	sub, _ := b.Subscribe("x.y")
+	sub.Close()
+
+	_, ok := <-sub.C()
+	if ok {
+		t.Fatal("expected channel to be closed after sub.Close()")
+	}
+}
+
+func TestPublishAfterUnsubscribe(t *testing.T) {
+	b := NewBroker[int]()
+	defer b.Close()
+
+	sub, _ := b.Subscribe("a.b")
+	b.Unsubscribe(sub)
+
+	defer func() {
+		if r := recover(); r != nil {
+			t.Fatalf("publish panicked: %v", r)
+		}
+	}()
+
+	b.Publish("a.b", 1)
+}
+
+func TestUnsubscribePrunesTrie(t *testing.T) {
+	b := NewBroker[string]()
+	defer b.Close()
+
+	sub, _ := b.Subscribe("a.b.c.d")
+	b.Unsubscribe(sub)
+
+	b.mu.RLock()
+	_, exists := b.root.children["a"]
+	b.mu.RUnlock()
+
+	if exists {
+		t.Fatal("expected trie node 'a' to be pruned after last subscription removed")
+	}
+}
+
+// --- Broker close ---
 
 func TestBrokerClose(t *testing.T) {
 	b := NewBroker[string]()
@@ -280,5 +356,36 @@ func TestBrokerClose(t *testing.T) {
 	}
 	if _, ok := <-sub2.C(); ok {
 		t.Fatal("sub2 channel not closed")
+	}
+}
+
+func TestBrokerCloseIdempotent(t *testing.T) {
+	b := NewBroker[string]()
+
+	if err := b.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.Close(); err != nil {
+		t.Fatalf("expected nil on repeated Close, got %v", err)
+	}
+}
+
+func TestPublishAfterClose(t *testing.T) {
+	b := NewBroker[string]()
+	b.Close()
+
+	err := b.Publish("foo.bar", "late")
+	if !errors.Is(err, ErrBrokerClosed) {
+		t.Fatalf("expected ErrBrokerClosed, got %v", err)
+	}
+}
+
+func TestSubscribeAfterClose(t *testing.T) {
+	b := NewBroker[string]()
+	b.Close()
+
+	_, err := b.Subscribe("foo.bar")
+	if !errors.Is(err, ErrBrokerClosed) {
+		t.Fatalf("expected ErrBrokerClosed, got %v", err)
 	}
 }
