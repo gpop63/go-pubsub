@@ -1,6 +1,7 @@
 package pubsub
 
 import (
+	"context"
 	"sync"
 	"time"
 )
@@ -33,7 +34,11 @@ func NewBroker[T any]() *Broker[T] {
 }
 
 // Publish sends a message to all subscribers whose patterns match the topic.
-func (b *Broker[T]) Publish(topic string, payload T) error {
+// An ID and timestamp are assigned automatically.
+func (b *Broker[T]) Publish(ctx context.Context, topic string, payload T) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	segments, err := validateTopic(topic)
 	if err != nil {
 		return err
@@ -98,7 +103,11 @@ func (b *Broker[T]) deliverToMatching(n *node[T], levels []string, msg Message[T
 }
 
 // Subscribe creates a subscription for the given topic pattern.
-func (b *Broker[T]) Subscribe(topicPattern string) (*Subscription[T], error) {
+func (b *Broker[T]) Subscribe(ctx context.Context, topicPattern string) (*Subscription[T], error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+
 	pat, err := compilePattern(topicPattern)
 	if err != nil {
 		return nil, err

@@ -1,10 +1,13 @@
 package pubsub
 
 import (
+	"context"
 	"errors"
 	"testing"
 	"time"
 )
+
+func bg() context.Context { return context.Background() }
 
 // --- Basic pub/sub ---
 
@@ -12,12 +15,12 @@ func TestPublishSubscribe(t *testing.T) {
 	b := NewBroker[string]()
 	defer b.Close()
 
-	sub, err := b.Subscribe("foo.bar")
+	sub, err := b.Subscribe(bg(), "foo.bar")
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	if err := b.Publish("foo.bar", "hello"); err != nil {
+	if err := b.Publish(bg(), "foo.bar", "hello"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -41,9 +44,9 @@ func TestPublishNoMatch(t *testing.T) {
 	b := NewBroker[string]()
 	defer b.Close()
 
-	sub, _ := b.Subscribe("foo.bar")
+	sub, _ := b.Subscribe(bg(), "foo.bar")
 
-	b.Publish("baz.qux", "miss")
+	b.Publish(bg(), "baz.qux", "miss")
 
 	select {
 	case msg := <-sub.C():
@@ -59,9 +62,9 @@ func TestSingleLevelWildcard(t *testing.T) {
 	b := NewBroker[int]()
 	defer b.Close()
 
-	sub, _ := b.Subscribe("foo.*")
+	sub, _ := b.Subscribe(bg(), "foo.*")
 
-	b.Publish("foo.bar", 42)
+	b.Publish(bg(), "foo.bar", 42)
 
 	select {
 	case msg := <-sub.C():
@@ -77,9 +80,9 @@ func TestSingleLevelWildcardNoMatchDeeper(t *testing.T) {
 	b := NewBroker[string]()
 	defer b.Close()
 
-	sub, _ := b.Subscribe("foo.*")
+	sub, _ := b.Subscribe(bg(), "foo.*")
 
-	b.Publish("foo.bar.baz", "deep")
+	b.Publish(bg(), "foo.bar.baz", "deep")
 
 	select {
 	case msg := <-sub.C():
@@ -93,9 +96,9 @@ func TestMultiLevelWildcard(t *testing.T) {
 	b := NewBroker[string]()
 	defer b.Close()
 
-	sub, _ := b.Subscribe("foo.**")
+	sub, _ := b.Subscribe(bg(), "foo.**")
 
-	b.Publish("foo.bar.baz", "ok")
+	b.Publish(bg(), "foo.bar.baz", "ok")
 
 	select {
 	case msg := <-sub.C():
@@ -111,9 +114,9 @@ func TestMultiLevelWildcardMatchesSingleLevel(t *testing.T) {
 	b := NewBroker[string]()
 	defer b.Close()
 
-	sub, _ := b.Subscribe("foo.**")
+	sub, _ := b.Subscribe(bg(), "foo.**")
 
-	b.Publish("foo.bar", "one-level")
+	b.Publish(bg(), "foo.bar", "one-level")
 
 	select {
 	case msg := <-sub.C():
@@ -129,9 +132,9 @@ func TestMultiLevelWildcardNoMatchRoot(t *testing.T) {
 	b := NewBroker[string]()
 	defer b.Close()
 
-	sub, _ := b.Subscribe("foo.**")
+	sub, _ := b.Subscribe(bg(), "foo.**")
 
-	b.Publish("foo", "root")
+	b.Publish(bg(), "foo", "root")
 
 	select {
 	case msg := <-sub.C():
@@ -145,11 +148,11 @@ func TestWildcardMixed(t *testing.T) {
 	b := NewBroker[string]()
 	defer b.Close()
 
-	sub, _ := b.Subscribe("a.*.c")
+	sub, _ := b.Subscribe(bg(), "a.*.c")
 
-	b.Publish("a.b.c", "match")
-	b.Publish("a.x.c", "also-match")
-	b.Publish("a.b.d", "no-match")
+	b.Publish(bg(), "a.b.c", "match")
+	b.Publish(bg(), "a.x.c", "also-match")
+	b.Publish(bg(), "a.b.d", "no-match")
 
 	received := 0
 	timeout := time.After(time.Second)
@@ -174,14 +177,14 @@ func TestCatchAllDoubleStarPattern(t *testing.T) {
 	b := NewBroker[string]()
 	defer b.Close()
 
-	sub, err := b.Subscribe("**")
+	sub, err := b.Subscribe(bg(), "**")
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	topics := []string{"foo", "foo.bar", "a.b.c.d"}
 	for _, topic := range topics {
-		b.Publish(topic, topic)
+		b.Publish(bg(), topic, topic)
 	}
 
 	for i, want := range topics {
@@ -200,10 +203,10 @@ func TestMultipleSubscribersSamePattern(t *testing.T) {
 	b := NewBroker[string]()
 	defer b.Close()
 
-	sub1, _ := b.Subscribe("events.click")
-	sub2, _ := b.Subscribe("events.click")
+	sub1, _ := b.Subscribe(bg(), "events.click")
+	sub2, _ := b.Subscribe(bg(), "events.click")
 
-	b.Publish("events.click", "btn")
+	b.Publish(bg(), "events.click", "btn")
 
 	for i, sub := range []*Subscription[string]{sub1, sub2} {
 		select {
@@ -236,7 +239,7 @@ func TestSubscribeInvalidPatterns(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, err := b.Subscribe(tt.pattern)
+			_, err := b.Subscribe(bg(), tt.pattern)
 			if err == nil {
 				t.Fatalf("expected error for pattern %q", tt.pattern)
 			}
@@ -260,7 +263,7 @@ func TestPublishInvalidTopics(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := b.Publish(tt.topic, "payload")
+			err := b.Publish(bg(), tt.topic, "payload")
 			if err == nil {
 				t.Fatalf("expected error for topic %q", tt.topic)
 			}
@@ -274,7 +277,7 @@ func TestUnsubscribeClosesChannel(t *testing.T) {
 	b := NewBroker[string]()
 	defer b.Close()
 
-	sub, _ := b.Subscribe("x.y")
+	sub, _ := b.Subscribe(bg(), "x.y")
 	b.Unsubscribe(sub)
 
 	_, ok := <-sub.C()
@@ -287,7 +290,7 @@ func TestUnsubscribeIdempotent(t *testing.T) {
 	b := NewBroker[string]()
 	defer b.Close()
 
-	sub, _ := b.Subscribe("x.y")
+	sub, _ := b.Subscribe(bg(), "x.y")
 
 	if err := b.Unsubscribe(sub); err != nil {
 		t.Fatal(err)
@@ -301,7 +304,7 @@ func TestSubscriptionClose(t *testing.T) {
 	b := NewBroker[string]()
 	defer b.Close()
 
-	sub, _ := b.Subscribe("x.y")
+	sub, _ := b.Subscribe(bg(), "x.y")
 	sub.Close()
 
 	_, ok := <-sub.C()
@@ -314,7 +317,7 @@ func TestPublishAfterUnsubscribe(t *testing.T) {
 	b := NewBroker[int]()
 	defer b.Close()
 
-	sub, _ := b.Subscribe("a.b")
+	sub, _ := b.Subscribe(bg(), "a.b")
 	b.Unsubscribe(sub)
 
 	defer func() {
@@ -323,14 +326,14 @@ func TestPublishAfterUnsubscribe(t *testing.T) {
 		}
 	}()
 
-	b.Publish("a.b", 1)
+	b.Publish(bg(), "a.b", 1)
 }
 
 func TestUnsubscribePrunesTrie(t *testing.T) {
 	b := NewBroker[string]()
 	defer b.Close()
 
-	sub, _ := b.Subscribe("a.b.c.d")
+	sub, _ := b.Subscribe(bg(), "a.b.c.d")
 	b.Unsubscribe(sub)
 
 	b.mu.RLock()
@@ -346,8 +349,8 @@ func TestUnsubscribePrunesTrie(t *testing.T) {
 
 func TestBrokerClose(t *testing.T) {
 	b := NewBroker[string]()
-	sub1, _ := b.Subscribe("a.b")
-	sub2, _ := b.Subscribe("x.y")
+	sub1, _ := b.Subscribe(bg(), "a.b")
+	sub2, _ := b.Subscribe(bg(), "x.y")
 
 	b.Close()
 
@@ -374,7 +377,7 @@ func TestPublishAfterClose(t *testing.T) {
 	b := NewBroker[string]()
 	b.Close()
 
-	err := b.Publish("foo.bar", "late")
+	err := b.Publish(bg(), "foo.bar", "late")
 	if !errors.Is(err, ErrBrokerClosed) {
 		t.Fatalf("expected ErrBrokerClosed, got %v", err)
 	}
@@ -384,8 +387,36 @@ func TestSubscribeAfterClose(t *testing.T) {
 	b := NewBroker[string]()
 	b.Close()
 
-	_, err := b.Subscribe("foo.bar")
+	_, err := b.Subscribe(bg(), "foo.bar")
 	if !errors.Is(err, ErrBrokerClosed) {
 		t.Fatalf("expected ErrBrokerClosed, got %v", err)
+	}
+}
+
+// --- Context cancellation ---
+
+func TestPublishContextCancelled(t *testing.T) {
+	b := NewBroker[string]()
+	defer b.Close()
+
+	ctx, cancel := context.WithCancel(bg())
+	cancel()
+
+	err := b.Publish(ctx, "foo.bar", "late")
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected context.Canceled, got %v", err)
+	}
+}
+
+func TestSubscribeContextCancelled(t *testing.T) {
+	b := NewBroker[string]()
+	defer b.Close()
+
+	ctx, cancel := context.WithCancel(bg())
+	cancel()
+
+	_, err := b.Subscribe(ctx, "foo.bar")
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected context.Canceled, got %v", err)
 	}
 }
