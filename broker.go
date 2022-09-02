@@ -21,15 +21,22 @@ func (n *node[T]) isEmpty() bool {
 // subscribers using a trie, supporting * and ** wildcards.
 // Safe for concurrent use.
 type Broker[T any] struct {
+	config brokerConfig
 	root   *node[T]
 	mu     sync.RWMutex
 	closed bool
 }
 
-// NewBroker creates a new Broker.
-func NewBroker[T any]() *Broker[T] {
+// NewBroker creates a new Broker with the given options.
+func NewBroker[T any](opts ...Option) *Broker[T] {
+	cfg := defaultConfig()
+	for _, op := range opts {
+		op(&cfg)
+	}
+
 	return &Broker[T]{
-		root: &node[T]{children: map[string]*node[T]{}},
+		config: cfg,
+		root:   &node[T]{children: map[string]*node[T]{}},
 	}
 }
 
@@ -75,9 +82,7 @@ func (b *Broker[T]) deliverToMatching(n *node[T], levels []string, msg Message[T
 
 	// Reached the end of the topic — deliver to subscribers here
 	if len(levels) == 0 {
-		for _, sub := range n.subs {
-			sub.ch <- msg
-		}
+		b.deliver(n.subs, msg)
 		return
 	}
 
@@ -96,8 +101,21 @@ func (b *Broker[T]) deliverToMatching(n *node[T], levels []string, msg Message[T
 
 	// Multi-level wildcard: ** matches one or more remaining segments
 	if child := n.children["**"]; child != nil {
-		for _, sub := range child.subs {
-			sub.ch <- msg
+		b.deliver(child.subs, msg)
+	}
+}
+
+// deliver sends msg to each subscription, dropping on full buffer.
+func (b *Broker[T]) deliver(subs []*Subscription[T], msg Message[T]) {
+	for _, sub := range subs {
+		if sub.closed {
+			continue
+		}
+
+		select {
+		case sub.ch <- msg:
+		default:
+			// buffer full — drop
 		}
 	}
 }
@@ -116,7 +134,7 @@ func (b *Broker[T]) Subscribe(ctx context.Context, topicPattern string) (*Subscr
 	sub := &Subscription[T]{
 		pattern: pat,
 		broker:  b,
-		ch:      make(chan Message[T], 256),
+		ch:      make(chan Message[T], b.config.bufferSize),
 	}
 
 	b.mu.Lock()

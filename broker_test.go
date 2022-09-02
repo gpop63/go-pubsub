@@ -420,3 +420,29 @@ func TestSubscribeContextCancelled(t *testing.T) {
 		t.Fatalf("expected context.Canceled, got %v", err)
 	}
 }
+
+// --- Buffer/drop behavior ---
+
+func TestDropWhenBufferFull(t *testing.T) {
+	b := NewBroker[int](WithBufferSize(0))
+	defer b.Close()
+
+	_, err := b.Subscribe(bg(), "a.b")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	b.Publish(bg(), "a.b", 1)
+	b.Publish(bg(), "a.b", 2)
+	// With buffer size 0, messages are dropped — no panic, no block
+}
+
+func TestWithBufferSizeNegativeClampsToZero(t *testing.T) {
+	b := NewBroker[int](WithBufferSize(-1))
+	defer b.Close()
+
+	_, _ = b.Subscribe(bg(), "a.b")
+
+	// Buffer size 0: publish should not block
+	b.Publish(bg(), "a.b", 1)
+}
