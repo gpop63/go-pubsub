@@ -3,8 +3,16 @@ package pubsub
 import (
 	"context"
 	"sync"
+	"sync/atomic"
 	"time"
 )
+
+// BrokerStats is a point-in-time snapshot of broker activity.
+type BrokerStats struct {
+	Delivered   int64
+	Dropped     int64
+	Subscribers int
+}
 
 // node is a trie node used for topic-based routing.
 // Each level of the trie corresponds to one dot-separated segment.
@@ -25,6 +33,11 @@ type Broker[T any] struct {
 	root   *node[T]
 	mu     sync.RWMutex
 	closed bool
+
+	// Metrics
+	delivered   int64
+	dropped     int64
+	subscribers int64
 }
 
 // NewBroker creates a new Broker with the given options.
@@ -114,8 +127,9 @@ func (b *Broker[T]) deliver(subs []*Subscription[T], msg Message[T]) {
 
 		select {
 		case sub.ch <- msg:
+			atomic.AddInt64(&b.delivered, 1)
 		default:
-			// buffer full — drop
+			atomic.AddInt64(&b.dropped, 1)
 		}
 	}
 }
@@ -144,6 +158,7 @@ func (b *Broker[T]) Subscribe(ctx context.Context, topicPattern string) (*Subscr
 		return nil, ErrBrokerClosed
 	}
 	insertNode(b.root, pat.segments, sub)
+	atomic.AddInt64(&b.subscribers, 1)
 	b.mu.Unlock()
 
 	return sub, nil
@@ -181,6 +196,7 @@ func (b *Broker[T]) Unsubscribe(sub *Subscription[T]) error {
 	sub.closed = true
 
 	removeSub(b.root, sub.pattern.segments, sub)
+	atomic.AddInt64(&b.subscribers, -1)
 	close(sub.ch)
 	return nil
 }
@@ -218,6 +234,26 @@ func removeSub[T any](n *node[T], levels []string, sub *Subscription[T]) bool {
 		return true
 	}
 	return false
+}
+
+// Stats returns a point-in-time snapshot of broker statistics.
+func (b *Broker[T]) Stats(ctx context.Context) (BrokerStats, error) {
+	if err := ctx.Err(); err != nil {
+		return BrokerStats{}, err
+	}
+
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+
+	if b.closed {
+		return BrokerStats{}, ErrBrokerClosed
+	}
+
+	return BrokerStats{
+		Delivered:   atomic.LoadInt64(&b.delivered),
+		Dropped:     atomic.LoadInt64(&b.dropped),
+		Subscribers: int(atomic.LoadInt64(&b.subscribers)),
+	}, nil
 }
 
 // Close shuts down the broker and closes all subscription channels.

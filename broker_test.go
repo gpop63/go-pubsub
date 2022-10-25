@@ -421,28 +421,37 @@ func TestSubscribeContextCancelled(t *testing.T) {
 	}
 }
 
-// --- Buffer/drop behavior ---
+// --- Stats ---
 
-func TestDropWhenBufferFull(t *testing.T) {
-	b := NewBroker[int](WithBufferSize(0))
+func TestStats(t *testing.T) {
+	b := NewBroker[string]()
 	defer b.Close()
 
-	_, err := b.Subscribe(bg(), "a.b")
+	b.Subscribe(bg(), "foo.bar")
+	b.Subscribe(bg(), "baz.*")
+
+	b.Publish(bg(), "foo.bar", "hello")
+
+	stats, err := b.Stats(bg())
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	b.Publish(bg(), "a.b", 1)
-	b.Publish(bg(), "a.b", 2)
-	// With buffer size 0, messages are dropped — no panic, no block
+	if stats.Subscribers != 2 {
+		t.Fatalf("expected 2 subscribers, got %d", stats.Subscribers)
+	}
+	if stats.Delivered != 1 {
+		t.Fatalf("expected 1 published, got %d", stats.Delivered)
+	}
 }
 
-func TestWithBufferSizeNegativeClampsToZero(t *testing.T) {
-	b := NewBroker[int](WithBufferSize(-1))
-	defer b.Close()
+func TestStatsAfterClose(t *testing.T) {
+	b := NewBroker[string]()
+	b.Subscribe(bg(), "foo.bar")
+	b.Close()
 
-	_, _ = b.Subscribe(bg(), "a.b")
-
-	// Buffer size 0: publish should not block
-	b.Publish(bg(), "a.b", 1)
+	_, err := b.Stats(bg())
+	if !errors.Is(err, ErrBrokerClosed) {
+		t.Fatalf("expected ErrBrokerClosed, got %v", err)
+	}
 }
