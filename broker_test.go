@@ -455,3 +455,98 @@ func TestStatsAfterClose(t *testing.T) {
 		t.Fatalf("expected ErrBrokerClosed, got %v", err)
 	}
 }
+
+// --- Filter ---
+
+func TestSubscribeWithFilter(t *testing.T) {
+	b := NewBroker[int]()
+	defer b.Close()
+
+	sub, err := b.Subscribe(bg(), "numbers.*", WithFilter(func(msg Message[int]) bool {
+		return msg.Payload%2 == 0
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for i := 1; i <= 4; i++ {
+		b.Publish(bg(), "numbers.all", i)
+	}
+
+	var received []int
+	timeout := time.After(time.Second)
+	for len(received) < 2 {
+		select {
+		case msg := <-sub.C():
+			received = append(received, msg.Payload)
+		case <-timeout:
+			t.Fatalf("expected 2 even numbers, got %v", received)
+		}
+	}
+
+	for _, v := range received {
+		if v%2 != 0 {
+			t.Fatalf("filter should have removed odd number %d", v)
+		}
+	}
+}
+
+func TestFilterPanicRecovery(t *testing.T) {
+	b := NewBroker[string]()
+	defer b.Close()
+
+	sub, _ := b.Subscribe(bg(), "test.*", WithFilter(func(msg Message[string]) bool {
+		if msg.Payload == "panic" {
+			panic("boom")
+		}
+		return true
+	}))
+
+	b.Publish(bg(), "test.a", "panic")
+	b.Publish(bg(), "test.b", "safe")
+
+	select {
+	case msg := <-sub.C():
+		if msg.Payload != "safe" {
+			t.Fatalf("expected 'safe', got %q", msg.Payload)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("filter goroutine should survive panic and deliver next message")
+	}
+
+}
+
+func TestFilterContextCancellation(t *testing.T) {
+	b := NewBroker[int]()
+	defer b.Close()
+
+	ctx, cancel := context.WithCancel(bg())
+	sub, err := b.Subscribe(ctx, "num.*", WithFilter(func(msg Message[int]) bool {
+		return msg.Payload%2 == 0
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Publish a few messages before cancelling.
+	b.Publish(bg(), "num.a", 2)
+	b.Publish(bg(), "num.a", 4)
+
+	// Give the filter goroutine time to forward.
+	time.Sleep(50 * time.Millisecond)
+
+	cancel()
+
+	// The output channel should close once the filter goroutine exits.
+	deadline := time.After(time.Second)
+	for {
+		select {
+		case _, ok := <-sub.C():
+			if !ok {
+				return // channel closed — success
+			}
+		case <-deadline:
+			t.Fatal("filter goroutine did not exit after context cancellation")
+		}
+	}
+}

@@ -118,7 +118,7 @@ func (b *Broker[T]) deliverToMatching(n *node[T], levels []string, msg Message[T
 	}
 }
 
-// deliver sends msg to each subscription, dropping on full buffer.
+// deliver sends msg to each active subscription, dropping on full buffer.
 func (b *Broker[T]) deliver(subs []*Subscription[T], msg Message[T]) {
 	for _, sub := range subs {
 		if sub.closed {
@@ -129,13 +129,20 @@ func (b *Broker[T]) deliver(subs []*Subscription[T], msg Message[T]) {
 		case sub.ch <- msg:
 			atomic.AddInt64(&b.delivered, 1)
 		default:
+			atomic.AddUint64(&sub.dropped, 1)
 			atomic.AddInt64(&b.dropped, 1)
 		}
 	}
 }
 
 // Subscribe creates a subscription for the given topic pattern.
-func (b *Broker[T]) Subscribe(ctx context.Context, topicPattern string) (*Subscription[T], error) {
+// See the package doc for wildcard syntax.
+//
+// When a [WithFilter] option is provided, ctx also controls the filter
+// goroutine: cancelling it drains buffered messages, unsubscribes, and
+// stops the goroutine. Without a filter, the caller must call
+// [Subscription.Close] or [Broker.Unsubscribe] to clean up.
+func (b *Broker[T]) Subscribe(ctx context.Context, topicPattern string, opts ...SubscribeOption[T]) (*Subscription[T], error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -145,10 +152,22 @@ func (b *Broker[T]) Subscribe(ctx context.Context, topicPattern string) (*Subscr
 		return nil, err
 	}
 
+	cfg := defaultSubscribeConfig[T]()
+	for _, op := range opts {
+		op(&cfg)
+	}
+
 	sub := &Subscription[T]{
 		pattern: pat,
 		broker:  b,
 		ch:      make(chan Message[T], b.config.bufferSize),
+	}
+
+	if cfg.filter != nil {
+		sub.filter = cfg.filter
+		sub.out = make(chan Message[T], b.config.bufferSize)
+	} else {
+		sub.out = sub.ch
 	}
 
 	b.mu.Lock()
@@ -160,6 +179,12 @@ func (b *Broker[T]) Subscribe(ctx context.Context, topicPattern string) (*Subscr
 	insertNode(b.root, pat.segments, sub)
 	atomic.AddInt64(&b.subscribers, 1)
 	b.mu.Unlock()
+
+	// Start the filter after insertion so its cleanup (Unsubscribe on
+	// ctx cancellation) can find the subscription in the trie.
+	if sub.filter != nil {
+		sub.startFilter(ctx)
+	}
 
 	return sub, nil
 }
@@ -191,7 +216,7 @@ func (b *Broker[T]) Unsubscribe(sub *Subscription[T]) error {
 	defer b.mu.Unlock()
 
 	if sub.closed {
-		return nil
+		return nil // already closed
 	}
 	sub.closed = true
 
@@ -276,7 +301,6 @@ func (b *Broker[T]) Close() error {
 			if sub.closed {
 				continue
 			}
-			sub.closed = true
 			close(sub.ch)
 		}
 		for _, child := range n.children {

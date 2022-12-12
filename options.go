@@ -26,3 +26,23 @@ func WithBufferSize(size int) Option {
 		bc.bufferSize = size
 	}
 }
+
+type subscribeConfig[T any] struct {
+	filter func(Message[T]) bool
+}
+
+func defaultSubscribeConfig[T any]() subscribeConfig[T] {
+	return subscribeConfig[T]{}
+}
+
+// SubscribeOption configures an individual subscription.
+type SubscribeOption[T any] func(*subscribeConfig[T])
+
+// WithFilter sets a predicate that messages must pass before delivery.
+// The filter runs in its own goroutine, so it won't block publishes.
+// Panics are recovered and the message is dropped.
+func WithFilter[T any](fn func(Message[T]) bool) SubscribeOption[T] {
+	return func(sc *subscribeConfig[T]) {
+		sc.filter = fn
+	}
+}
