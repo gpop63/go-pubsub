@@ -157,15 +157,20 @@ func (b *Broker[T]) Subscribe(ctx context.Context, topicPattern string, opts ...
 		op(&cfg)
 	}
 
+	bufSize := b.config.bufferSize
+	if cfg.bufferSize >= 0 {
+		bufSize = cfg.bufferSize
+	}
+
 	sub := &Subscription[T]{
 		pattern: pat,
 		broker:  b,
-		ch:      make(chan Message[T], b.config.bufferSize),
+		ch:      make(chan Message[T], bufSize),
 	}
 
 	if cfg.filter != nil {
 		sub.filter = cfg.filter
-		sub.out = make(chan Message[T], b.config.bufferSize)
+		sub.out = make(chan Message[T], bufSize)
 	} else {
 		sub.out = sub.ch
 	}

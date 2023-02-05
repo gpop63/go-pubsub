@@ -29,6 +29,22 @@ func (s *Subscription[T]) Close() error {
 	return s.broker.Unsubscribe(s)
 }
 
+// Pattern returns the topic pattern this subscription matches.
+func (s *Subscription[T]) Pattern() string {
+	return s.pattern.raw
+}
+
+// Dropped returns the number of messages dropped due to a full buffer.
+func (s *Subscription[T]) Dropped() uint64 {
+	return atomic.LoadUint64(&s.dropped)
+}
+
+// FilterPanics returns the number of messages dropped because the filter
+// panicked. Non-zero means the filter has a bug.
+func (s *Subscription[T]) FilterPanics() uint64 {
+	return atomic.LoadUint64(&s.filterPanics)
+}
+
 // startFilter runs the filter predicate in a goroutine, forwarding
 // matching messages from ch to out. When ctx is cancelled it drains
 // buffered messages and exits. Filter panics are recovered.

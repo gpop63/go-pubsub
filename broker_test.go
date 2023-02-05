@@ -514,6 +514,9 @@ func TestFilterPanicRecovery(t *testing.T) {
 		t.Fatal("filter goroutine should survive panic and deliver next message")
 	}
 
+	if sub.FilterPanics() == 0 {
+		t.Fatal("expected FilterPanics counter > 0")
+	}
 }
 
 func TestFilterContextCancellation(t *testing.T) {
@@ -548,5 +551,89 @@ func TestFilterContextCancellation(t *testing.T) {
 		case <-deadline:
 			t.Fatal("filter goroutine did not exit after context cancellation")
 		}
+	}
+}
+
+// --- Subscription buffer size override ---
+
+func TestSubscriptionBufferSizeOverride(t *testing.T) {
+	b := NewBroker[int](WithBufferSize(100))
+	defer b.Close()
+
+	sub, _ := b.Subscribe(bg(), "test.topic", WithSubscriptionBufferSize[int](1))
+
+	// Fill the buffer (size 1)
+	b.Publish(bg(), "test.topic", 1)
+	b.Publish(bg(), "test.topic", 2)
+
+	// Second message should be dropped
+	stats, _ := b.Stats(bg())
+	if stats.Dropped == 0 {
+		t.Fatal("expected dropped message with small buffer")
+	}
+
+	// First message should be received
+	select {
+	case msg := <-sub.C():
+		if msg.Payload != 1 {
+			t.Fatalf("expected payload 1, got %d", msg.Payload)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("expected to receive message")
+	}
+}
+
+// --- Per-subscription observability ---
+
+func TestSubscriptionDroppedCounter(t *testing.T) {
+	b := NewBroker[int](WithBufferSize(0))
+	defer b.Close()
+
+	sub, _ := b.Subscribe(bg(), "a.b")
+
+	b.Publish(bg(), "a.b", 1)
+	b.Publish(bg(), "a.b", 2)
+
+	if sub.Dropped() == 0 {
+		t.Fatal("expected per-subscription Dropped counter > 0")
+	}
+}
+
+func TestWithBufferSizeNegativeClampsToZero(t *testing.T) {
+	b := NewBroker[int](WithBufferSize(-1))
+	defer b.Close()
+
+	sub, _ := b.Subscribe(bg(), "a.b")
+
+	// Buffer size 0: first publish should be dropped immediately.
+	b.Publish(bg(), "a.b", 1)
+
+	if sub.Dropped() == 0 {
+		t.Fatal("expected message to be dropped with clamped buffer size 0")
+	}
+}
+
+func TestWithSubscriptionBufferSizeNegativeClampsToZero(t *testing.T) {
+	b := NewBroker[int](WithBufferSize(100))
+	defer b.Close()
+
+	sub, _ := b.Subscribe(bg(), "a.b", WithSubscriptionBufferSize[int](-5))
+
+	// Buffer size 0: first publish should be dropped immediately.
+	b.Publish(bg(), "a.b", 1)
+
+	if sub.Dropped() == 0 {
+		t.Fatal("expected message to be dropped with clamped buffer size 0")
+	}
+}
+
+func TestSubscriptionPattern(t *testing.T) {
+	b := NewBroker[string]()
+	defer b.Close()
+
+	sub, _ := b.Subscribe(bg(), "orders.*")
+
+	if sub.Pattern() != "orders.*" {
+		t.Fatalf("expected pattern %q, got %q", "orders.*", sub.Pattern())
 	}
 }

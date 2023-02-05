@@ -28,15 +28,29 @@ func WithBufferSize(size int) Option {
 }
 
 type subscribeConfig[T any] struct {
-	filter func(Message[T]) bool
+	bufferSize int // -1 means use broker default
+	filter     func(Message[T]) bool
 }
 
 func defaultSubscribeConfig[T any]() subscribeConfig[T] {
-	return subscribeConfig[T]{}
+	return subscribeConfig[T]{
+		bufferSize: -1,
+	}
 }
 
 // SubscribeOption configures an individual subscription.
 type SubscribeOption[T any] func(*subscribeConfig[T])
+
+// WithSubscriptionBufferSize overrides the broker's default buffer size
+// for this subscription. Negative values are treated as 0.
+func WithSubscriptionBufferSize[T any](size int) SubscribeOption[T] {
+	return func(sc *subscribeConfig[T]) {
+		if size < 0 {
+			size = 0
+		}
+		sc.bufferSize = size
+	}
+}
 
 // WithFilter sets a predicate that messages must pass before delivery.
 // The filter runs in its own goroutine, so it won't block publishes.
