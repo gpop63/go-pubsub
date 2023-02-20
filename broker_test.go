@@ -1,6 +1,7 @@
 package pubsub
 
 import (
+	"sync"
 	"context"
 	"errors"
 	"testing"
@@ -636,4 +637,66 @@ func TestSubscriptionPattern(t *testing.T) {
 	if sub.Pattern() != "orders.*" {
 		t.Fatalf("expected pattern %q, got %q", "orders.*", sub.Pattern())
 	}
+}
+
+// --- Concurrency ---
+
+func TestConcurrentPublish(t *testing.T) {
+	b := NewBroker[int]()
+	defer b.Close()
+
+	sub, _ := b.Subscribe(bg(), "foo.bar")
+
+	const publishers = 10
+	const messages = 1000
+
+	var wg sync.WaitGroup
+	wg.Add(publishers)
+	for i := 0; i < publishers; i++ {
+		go func(id int) {
+			defer wg.Done()
+			for j := 0; j < messages; j++ {
+				b.Publish(bg(), "foo.bar", id*messages+j)
+			}
+		}(i)
+	}
+
+	wg.Wait()
+
+	count := 0
+	for {
+		select {
+		case <-sub.C():
+			count++
+		default:
+			goto done
+		}
+	}
+done:
+	if count == 0 {
+		t.Fatal("expected to receive messages")
+	}
+}
+
+func TestConcurrentSubscribeUnsubscribe(t *testing.T) {
+	b := NewBroker[string]()
+	defer b.Close()
+
+	var wg sync.WaitGroup
+	wg.Add(100)
+	for i := 0; i < 100; i++ {
+		go func() {
+			defer wg.Done()
+			sub, err := b.Subscribe(bg(), "foo.bar")
+			if err != nil {
+				t.Errorf("subscribe failed: %v", err)
+				return
+			}
+			if err := b.Publish(bg(), "foo.bar", "msg"); err != nil {
+				t.Errorf("publish failed: %v", err)
+			}
+			sub.Close()
+		}()
+	}
+	wg.Wait()
 }
