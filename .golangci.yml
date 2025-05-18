@@ -1,0 +1,155 @@
+version: "2"
+
+run:
+  timeout: 5m
+  modules-download-mode: readonly
+
+linters:
+  default: none
+  enable:
+    # Default/essential linters
+    - errcheck      # Unchecked errors
+    - govet         # Suspicious constructs
+    - ineffassign   # Ineffectual assignments
+    - staticcheck   # Comprehensive static analysis
+    - unused        # Unused code
+
+    # Bug detection
+    - nilerr        # Returning nil after error check
+    - errorlint     # Error wrapping issues
+
+    # Code style
+    - misspell      # Spelling mistakes
+    - unconvert     # Unnecessary type conversions
+    - unparam       # Unused function parameters
+    - goconst       # Repeated strings that could be constants
+
+    # Security
+    - gosec         # Security issues
+
+    # Code quality
+    - gocritic      # Opinionated but useful
+    - revive        # Replacement for golint
+    - nolintlint    # Enforce nolint comment hygiene
+
+  settings:
+    errcheck:
+      check-type-assertions: true
+      check-blank: true
+      exclude-functions:
+        - (io.Closer).Close
+        - (*os.File).Close
+
+    govet:
+      enable-all: true
+      disable:
+        - fieldalignment # Too noisy, minor perf gains
+
+    staticcheck:
+      checks: ["all"]
+
+    revive:
+      severity: warning
+      rules:
+        - name: blank-imports
+        - name: context-as-argument
+        - name: context-keys-type
+        - name: dot-imports
+        - name: error-naming
+        - name: error-return
+        - name: error-strings
+        - name: errorf
+        - name: exported
+        - name: if-return
+        - name: increment-decrement
+        - name: indent-error-flow
+        - name: package-comments
+        - name: range
+        - name: receiver-naming
+        - name: redefines-builtin-id
+        - name: superfluous-else
+        - name: time-naming
+        - name: unexported-return
+        - name: unreachable-code
+        - name: var-declaration
+        - name: var-naming
+
+    gocritic:
+      enabled-tags:
+        - diagnostic
+        - style
+        - performance
+      disabled-checks:
+        - hugeParam      # Generic types trigger false positives
+        - rangeValCopy   # Often false positive with small structs
+        - unnamedResult  # Too noisy
+
+    misspell:
+      locale: US
+
+    goconst:
+      min-len: 3
+      min-occurrences: 4
+
+    gosec:
+      excludes:
+        - G104 # Duplicates errcheck
+        - G304 # File path from variable (often false positive)
+
+    errorlint:
+      errorf: true
+      asserts: true
+      comparison: true
+
+    unparam:
+      check-exported: false
+
+    nolintlint:
+      require-explanation: true
+      require-specific: true
+
+  exclusions:
+    rules:
+      # Test files are more relaxed
+      - path: _test\.go
+        linters:
+          - errcheck
+          - gosec
+          - goconst
+          - unparam
+          - gocritic
+
+      # Example test files
+      - path: example_test\.go
+        linters:
+          - revive
+          - errcheck
+
+      # Benchmark files
+      - path: bench_test\.go
+        linters:
+          - errcheck
+          - unparam
+          - revive
+
+formatters:
+  enable:
+    - gofmt
+    - goimports
+  settings:
+    goimports:
+      local-prefixes:
+        - github.com/gpop63/go-pubsub
+
+issues:
+  max-issues-per-linter: 50
+  max-same-issues: 5
+
+output:
+  formats:
+    text:
+      colors: true
+  sort-order:
+    - linter
+    - severity
+    - file

@@ -35,9 +35,9 @@ type Broker[T any] struct {
 	closed bool
 
 	// Metrics
-	delivered   int64
-	dropped     int64
-	subscribers int64
+	delivered   atomic.Int64
+	dropped     atomic.Int64
+	subscribers atomic.Int64
 }
 
 // NewBroker creates a new Broker with the given options.
@@ -121,16 +121,16 @@ func (b *Broker[T]) deliverToMatching(n *node[T], levels []string, msg Message[T
 // deliver sends msg to each active subscription, dropping on full buffer.
 func (b *Broker[T]) deliver(subs []*Subscription[T], msg Message[T]) {
 	for _, sub := range subs {
-		if sub.closed {
+		if sub.closed.Load() {
 			continue
 		}
 
 		select {
 		case sub.ch <- msg:
-			atomic.AddInt64(&b.delivered, 1)
+			b.delivered.Add(1)
 		default:
-			atomic.AddUint64(&sub.dropped, 1)
-			atomic.AddInt64(&b.dropped, 1)
+			sub.dropped.Add(1)
+			b.dropped.Add(1)
 		}
 	}
 }
@@ -182,7 +182,7 @@ func (b *Broker[T]) Subscribe(ctx context.Context, topicPattern string, opts ...
 		return nil, ErrBrokerClosed
 	}
 	insertNode(b.root, pat.segments, sub)
-	atomic.AddInt64(&b.subscribers, 1)
+	b.subscribers.Add(1)
 	b.mu.Unlock()
 
 	// Start the filter after insertion so its cleanup (Unsubscribe on
@@ -220,13 +220,12 @@ func (b *Broker[T]) Unsubscribe(sub *Subscription[T]) error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
-	if sub.closed {
+	if sub.closed.Swap(true) {
 		return nil // already closed
 	}
-	sub.closed = true
 
 	removeSub(b.root, sub.pattern.segments, sub)
-	atomic.AddInt64(&b.subscribers, -1)
+	b.subscribers.Add(-1)
 	close(sub.ch)
 	return nil
 }
@@ -280,9 +279,9 @@ func (b *Broker[T]) Stats(ctx context.Context) (BrokerStats, error) {
 	}
 
 	return BrokerStats{
-		Delivered:   atomic.LoadInt64(&b.delivered),
-		Dropped:     atomic.LoadInt64(&b.dropped),
-		Subscribers: int(atomic.LoadInt64(&b.subscribers)),
+		Delivered:   b.delivered.Load(),
+		Dropped:     b.dropped.Load(),
+		Subscribers: int(b.subscribers.Load()),
 	}, nil
 }
 
@@ -303,7 +302,7 @@ func (b *Broker[T]) Close() error {
 			return
 		}
 		for _, sub := range n.subs {
-			if sub.closed {
+			if sub.closed.Swap(true) {
 				continue
 			}
 			close(sub.ch)

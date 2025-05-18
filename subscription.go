@@ -13,9 +13,9 @@ type Subscription[T any] struct {
 	filter       func(Message[T]) bool
 	ch           chan Message[T] // internal send channel (or filter input)
 	out          chan Message[T] // external read channel (equals ch when no filter)
-	closed       bool
-	dropped      uint64 // messages dropped due to full buffer
-	filterPanics uint64 // messages dropped due to filter panic
+	closed       atomic.Bool
+	dropped      atomic.Uint64 // messages dropped due to full buffer
+	filterPanics atomic.Uint64 // messages dropped due to filter panic
 }
 
 // C returns a receive-only channel for messages.
@@ -36,13 +36,13 @@ func (s *Subscription[T]) Pattern() string {
 
 // Dropped returns the number of messages dropped due to a full buffer.
 func (s *Subscription[T]) Dropped() uint64 {
-	return atomic.LoadUint64(&s.dropped)
+	return s.dropped.Load()
 }
 
 // FilterPanics returns the number of messages dropped because the filter
 // panicked. Non-zero means the filter has a bug.
 func (s *Subscription[T]) FilterPanics() uint64 {
-	return atomic.LoadUint64(&s.filterPanics)
+	return s.filterPanics.Load()
 }
 
 // startFilter runs the filter predicate in a goroutine, forwarding
@@ -62,7 +62,7 @@ func (s *Subscription[T]) startFilter(ctx context.Context) {
 					select {
 					case s.out <- msg:
 					default:
-						atomic.AddUint64(&s.dropped, 1)
+						s.dropped.Add(1)
 					}
 				}
 
@@ -78,7 +78,7 @@ func (s *Subscription[T]) startFilter(ctx context.Context) {
 							select {
 							case s.out <- msg:
 							default:
-								atomic.AddUint64(&s.dropped, 1)
+								s.dropped.Add(1)
 							}
 						}
 					default:
@@ -97,7 +97,7 @@ func (s *Subscription[T]) startFilter(ctx context.Context) {
 func (s *Subscription[T]) applyFilter(msg Message[T]) (ok bool) {
 	defer func() {
 		if r := recover(); r != nil {
-			atomic.AddUint64(&s.filterPanics, 1)
+			s.filterPanics.Add(1)
 			ok = false
 		}
 	}()
