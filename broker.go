@@ -64,13 +64,8 @@ func (b *Broker[T]) Publish(ctx context.Context, topic string, payload T) error 
 		return err
 	}
 
-	id, err := generateID() // crypto/rand syscall on every publish
-	if err != nil {
-		return err
-	}
-
 	msg := Message[T]{
-		ID:        id,
+		ID:        generateID(),
 		Topic:     topic,
 		Payload:   payload,
 		CreatedAt: time.Now(),
@@ -139,7 +134,7 @@ func (b *Broker[T]) deliver(subs []*Subscription[T], msg Message[T]) {
 // See the package doc for wildcard syntax.
 //
 // When a [WithFilter] option is provided, ctx also controls the filter
-// goroutine: cancelling it drains buffered messages, unsubscribes, and
+// goroutine: canceling it drains buffered messages, unsubscribes, and
 // stops the goroutine. Without a filter, the caller must call
 // [Subscription.Close] or [Broker.Unsubscribe] to clean up.
 func (b *Broker[T]) Subscribe(ctx context.Context, topicPattern string, opts ...SubscribeOption[T]) (*Subscription[T], error) {
@@ -238,13 +233,14 @@ func removeSub[T any](n *node[T], levels []string, sub *Subscription[T]) bool {
 
 	if len(levels) == 0 {
 		for i, s := range n.subs {
-			if s == sub {
-				last := len(n.subs) - 1
-				n.subs[i] = n.subs[last]
-				n.subs[last] = nil // nil the vacated slot to avoid memory leak
-				n.subs = n.subs[:last]
-				return true
+			if s != sub {
+				continue
 			}
+			last := len(n.subs) - 1
+			n.subs[i] = n.subs[last]
+			n.subs[last] = nil // nil the vacated slot to avoid memory leak
+			n.subs = n.subs[:last]
+			return true
 		}
 		return false
 	}

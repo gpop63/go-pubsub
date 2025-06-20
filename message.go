@@ -1,9 +1,8 @@
 package pubsub
 
 import (
-	"crypto/rand"
-	"encoding/hex"
-	"fmt"
+	"strconv"
+	"sync/atomic"
 	"time"
 )
 
@@ -15,11 +14,9 @@ type Message[T any] struct {
 	CreatedAt time.Time
 }
 
-// generateID creates a cryptographically random 16-byte hex-encoded ID.
-func generateID() (string, error) {
-	b := make([]byte, 16)
-	if _, err := rand.Read(b); err != nil {
-		return "", fmt.Errorf("generate message ID: %w", err)
-	}
-	return hex.EncodeToString(b), nil
+var nextID atomic.Uint64
+
+// generateID returns a unique monotonic message ID.
+func generateID() string {
+	return strconv.FormatUint(nextID.Add(1), 10)
 }

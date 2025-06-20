@@ -46,7 +46,7 @@ func (s *Subscription[T]) FilterPanics() uint64 {
 }
 
 // startFilter runs the filter predicate in a goroutine, forwarding
-// matching messages from ch to out. When ctx is cancelled it drains
+// matching messages from ch to out. When ctx is canceled it drains
 // buffered messages and exits. Filter panics are recovered.
 func (s *Subscription[T]) startFilter(ctx context.Context) {
 	go func() {
@@ -67,7 +67,7 @@ func (s *Subscription[T]) startFilter(ctx context.Context) {
 				}
 
 			case <-ctx.Done():
-				// Context cancelled — drain what's left.
+				// Context canceled — drain what's left.
 				for {
 					select {
 					case msg, ok := <-s.ch:
@@ -84,7 +84,7 @@ func (s *Subscription[T]) startFilter(ctx context.Context) {
 					default:
 						// Nothing left; unsubscribe so the broker stops
 						// sending to this subscription.
-						_ = s.broker.Unsubscribe(s)
+						s.broker.Unsubscribe(s) //nolint:errcheck // best-effort cleanup on context cancellation
 						return
 					}
 				}

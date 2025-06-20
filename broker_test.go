@@ -1,9 +1,9 @@
 package pubsub
 
 import (
-	"sync"
 	"context"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 )
@@ -532,7 +532,7 @@ func TestFilterContextCancellation(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Publish a few messages before cancelling.
+	// Publish a few messages before canceling.
 	b.Publish(bg(), "num.a", 2)
 	b.Publish(bg(), "num.a", 4)
 
