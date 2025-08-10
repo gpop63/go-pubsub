@@ -134,8 +134,9 @@ func (b *Broker[T]) deliver(subs []*Subscription[T], msg Message[T]) {
 // See the package doc for wildcard syntax.
 //
 // When a [WithFilter] option is provided, ctx also controls the filter
-// goroutine: canceling it drains buffered messages, unsubscribes, and
-// stops the goroutine. Without a filter, the caller must call
+// goroutine: canceling it unsubscribes, drains already-buffered messages,
+// and stops the goroutine.
+// Without a filter, the caller must call
 // [Subscription.Close] or [Broker.Unsubscribe] to clean up.
 func (b *Broker[T]) Subscribe(ctx context.Context, topicPattern string, opts ...SubscribeOption[T]) (*Subscription[T], error) {
 	if err := ctx.Err(); err != nil {
@@ -212,6 +213,13 @@ func insertNode[T any](n *node[T], levels []string, sub *Subscription[T]) {
 // Unsubscribe removes a subscription and closes its channel.
 // Subsequent calls are no-ops.
 func (b *Broker[T]) Unsubscribe(sub *Subscription[T]) error {
+	if sub == nil {
+		return ErrNilSubscription
+	}
+	if sub.broker != b {
+		return ErrForeignSubscription
+	}
+
 	b.mu.Lock()
 	defer b.mu.Unlock()
 

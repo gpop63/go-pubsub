@@ -63,31 +63,25 @@ func (s *Subscription[T]) startFilter(ctx context.Context) {
 					case s.out <- msg:
 					default:
 						s.dropped.Add(1)
+						s.broker.dropped.Add(1)
 					}
 				}
 
 			case <-ctx.Done():
-				// Context canceled — drain what's left.
-				for {
-					select {
-					case msg, ok := <-s.ch:
-						if !ok {
-							return
+				// Context canceled — unsubscribe first to stop new
+				// messages, then drain whatever is already buffered.
+				s.broker.Unsubscribe(s) //nolint:errcheck // best-effort cleanup on context cancellation
+				for msg := range s.ch {
+					if s.applyFilter(msg) {
+						select {
+						case s.out <- msg:
+						default:
+							s.dropped.Add(1)
+							s.broker.dropped.Add(1)
 						}
-						if s.applyFilter(msg) {
-							select {
-							case s.out <- msg:
-							default:
-								s.dropped.Add(1)
-							}
-						}
-					default:
-						// Nothing left; unsubscribe so the broker stops
-						// sending to this subscription.
-						s.broker.Unsubscribe(s) //nolint:errcheck // best-effort cleanup on context cancellation
-						return
 					}
 				}
+				return
 			}
 		}
 	}()
